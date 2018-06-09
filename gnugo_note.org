@@ -1,0 +1,711 @@
+#+STARTUP: align indent
+#+LATEX_COMPILER: xelatex
+#+LATEX_HEADER: \usepackage[UTF8, heading = false, scheme = plain]{ctex}
+#+OPTIONS: tex:t
+#+LATEX_HEADER: \usepackage{parskip}
+#+LATEX_HEADER: \usepackage{mdframed}
+#+LATEX_HEADER: \usepackage{xcolor}
+#+LATEX_HEADER: \usepackage{listings}
+#+LATEX_HEADER: \usepackage{caption}
+#+LATEX_HEADER: \usepackage{fancyvrb}
+#+LATEX_HEADER: \usepackage{float}
+#+LATEX_HEADER: \renewcommand*{\ttdefault}{qcr}
+
+#+TITLE: GNU Go 文檔節譯
+#+AUTHOR: 龔存
+#+EMAIL: gcdevelop@163.com
+
+* Worms and Dragons
+
+在考慮走子之前，GNU Go 收集一些信息放入一些數組中。其中兩個數組，被稱為 *worm*
+和 *dragon*，將會在本章討論。其他內容將會在 [[eyes_and_halfeyes][Eyes and HalfEyes]] 中討論。
+
+這些信息旨在幫助評估各組的連接性，眼位形狀，逃生可能以及死活狀態。
+
+之後由 *genmove()* 調用的例程將可以訪問這些信息。本文試圖解釋這個初步分析的原理
+和算法，它由 'dragon.c' 中的兩個例程 *make_worm()* 和 *make_dragon()* 來執行。
+
+/Worm/ 是棋盤上最大的一組相同顏色的棋子，它們沿水平線或垂直線相連，我們經常可
+以稱之為串。
+
+/Dragon/ 由相同顏色棋子的串組成，將被視為一個單位。龍在每一次走子后都會重新生成。
+如果有兩個串在龍中，電腦假設它們具有有效連接並且同生共死。
+
+Dragon 代碼的目的是讓電腦制定關於圍棋死活的有意義的陳述，舉個例子，考慮以下情況：
+
+#+BEGIN_EXAMPLE
+
+      OOOOO
+     OOXXXOO
+     OX...XO
+     OXXXXXO
+      OOOOO
+
+#+END_EXAMPLE
+
+*X* 區域應被視為一個單個組（a single group），並有一個含三個交叉點的眼，但由兩個
+分離的串組成，因此我們必須將這兩個串合併成一條單獨的龍，這個斷言之所以有意義，是
+由於如果我們在中心點落子，將會殺死或做活這條龍，這對雙方都至關重要。如果 *X* 區
+域不被視為一個單元，那麼將很難指定這個條件。
+
+#+BEGIN_EXAMPLE
+
+      Death            Life
+
+      OOOOO            OOOOO
+     OOXXXOO          OOXXXOO
+     OX.O.XO          OX.X.XO
+     OXXXXXO          OXXXXXO
+      OOOOO            OOOOO
+
+#+END_EXAMPLE
+
+目前 dragon 代碼的實現涉及簡化假設，這些假設可以在以後的實現中得到細化。
+
+** Worms
+
+   數組 =struct worm_data worm[MAX_BOARD]= 保存了關於 worms 的信息，我們將給出各
+   個字段的定義，每個字段在 worm 的每個頂點都有恆定值。 我們將定義每個字段：
+
+#+BEGIN_SRC c
+  struct worm_data {
+      int   color;
+      int   size;
+      float effective_size;
+      int   origin;
+      int   liberties;
+      int   liberties2;
+      int   liberties3;
+      int   liberties4;
+      int   lunch;
+      int   cutstone;
+      int   cutstone2;
+      int   genus;
+      int   inessential;
+      int   invincible;
+      int   unconditional_status;
+      int   attack_points[MAX_TACTICAL_POINTS];
+      int   attack_codes[MAX_TACTICAL_POINTS];
+      int   defense_points[MAX_TACTICAL_POINTS];
+      int   defend_codes[MAX_TACTICAL_POINTS];
+      int   attack_threat_points[MAX_TACTICAL_POINTS];
+      int   attack_threat_codes[MAX_TACTICAL_POINTS];
+      int   defense_threat_points[MAX_TACTICAL_POINTS];
+      int   defense_threat_codes[MAX_TACTICAL_POINTS];
+  };
+#+END_SRC
+
+- color
+
+  串的顏色（黑或白）
+
+- size
+
+  包含了串的基數
+
+- effective_size
+
+  一個串中的棋子數加上空交叉點數，空交叉點和這個串的距離不會比和其他串的距離更遠。
+  共享的交叉點數被計算為串的平均值，并用於測量所捕獲的串的直接領土價值,
+  /effective_size/ 是一個浮點數。 只有當交叉點和串的距離小於等於 4 時才會被計算。
+
+- origin
+
+  每一個串都有一個代表性成員，被稱之為 “起源”，我們通過比較兩個節點的“起源”
+  來確定這兩個節點是否在同一串中。同樣如果我們希望對每一個串進行測試，只需在起點
+  執行它，而忽略其他節點。。測試的特征是：
+
+  #+BEGIN_SRC c
+  worm[pos].origin == pos
+  #+END_SRC
+
+- liberties
+- liberties2
+- liberties3
+- liberties4
+
+  對於非空的串，字段 liberties 表示氣，並且分別被二階氣（liberties2）、三階氣
+  （liberties3）、四階氣（liberties4）所補充。氣表明棋子周圍的空交叉點數。氣的階
+  數 n 是指最少可以放置 n 個棋子來連接到相同顏色的串，同時當棋子和串的距離大於 1
+  時，棋子周圍不能有相反顏色的棋子，並且通過打劫來連接是不允許的。因此以下的形狀
+  對應的氣及其高階形式表達如下：
+
+#+BEGIN_EXAMPLE
+
+          .XX...    We label the     .XX.4.
+          XO....    liberties of     XO1234
+          XO....    order < 5 of     XO1234
+          ......    the O group:     .12.4.
+          .X.X..                     .X.X..
+
+#+END_EXAMPLE
+
+  高階氣的周圍不能有相反顏色的棋子，意味著棋子可以有跳、大跳、飛、大飛等活動，可
+  以用於評估串是否被包圍。
+
+  如果距離氣為 1 的位置放置了兩顆相反顏色的棋子（小尖的位置），意味著 O 棋子被兩
+  個 X 棋子在左邊阻擋：
+
+#+BEGIN_EXAMPLE
+          X.
+          .O
+          X.
+#+END_EXAMPLE
+
+  我們將 n 稱之為氣的階數 n 和龍的距離。
+
+- lunch
+
+  如果非零，/lunch/ 指向一個容易被捕捉的位於邊界的串。（這個串是否可以防守並不重
+  要。）
+
+我們有兩種截然不同分割棋子的概念，分別在字段 =worm.cutstone= 和 =worm.cutstone2=
+中保持追蹤。我們目前並行使用這兩種概念。
+
+- cutstone
+
+  這個字段等於 2 時表明正在分斷棋子，1 表明可能在分斷。否則為 0。這個字段的定義：
+  一個正在分斷的棋子是指分開了敵方兩串棋子，並且沒有公氣。最常見的分斷情況如下：
+
+#+BEGIN_EXAMPLE
+          XO
+          OX
+#+END_EXAMPLE
+
+  一個可能的分斷情況如下（ *X* ）：
+
+#+BEGIN_EXAMPLE
+          XO
+          O.
+#+END_EXAMPLE
+
+  對於處於分斷的情況，我們設置：
+
+#+BEGIN_SRC c
+  worm[].cutstone=2
+#+END_SRC
+
+  對於將要分斷的情況，我們設置：
+
+#+BEGIN_SRC c
+  worm[].cutstone=1
+#+END_SRC
+
+
+- cutstone2
+
+  斷點由連接數據庫(connections database)中的模式標識。攻擊或防禦，以及連接或切斷
+  大龍，都會引起斷點的產生。 =cutstone2= 字段被 =find_cuts()= 例程所設置，此例程
+  被 =make_domains()= 函數調用。
+
+- genus
+
+  虧格對串和龍分別有不同的意義。對於龍來說更為重要，因此 =dragon[pos].genus= 遠
+  比 =worm[pos].genus= 更為有用。兩個字段都用於評估眼位大致的數量。串的虧格是其
+  補碼的聯通分量減去 1。這是對一個串的眼位的大致數量的評估。
+
+- inessential
+
+  殘子是指沒有生命潛力的棋子，除非包圍其的敵子被殺死。殘子更準確的定義是指虧格為
+  0 的棋子，並且其周圍的敵子不能輕易地被捕獲，而且其氣較緊或者沒有二階氣，並且滿
+  足以下屬性：如果這一串棋子被從棋盤上移走，剩下的空腔必與敵方的棋子接壤。
+
+- invincible
+
+  鐵活的棋子是指 GNU Go 覺得不能被捕獲的串。鐵活的棋子由函數
+  =unconditional_life()= 所計算，它試圖找到那些不能被捕捉的棋子，即使對手可以連
+  續下任意步。
+
+- unconditional_status
+
+  無條件狀態同樣被函數 =unconditional_life= 所設置。如果棋子是活棋時（明確地有兩
+  個或兩個以上真眼）其值將被設置為 ALIVE，反之即為 DEAD。不屬於對手活棋眼位的空
+  交叉點被稱之為無條件領土（unconditional territory）。取決於領土的歸屬，其無條
+  件狀態將被設為WHITE_TERRITORY 或者 BLACK_TERRITORY。最後，如果棋子可以被捕捉，
+  但是其與己方的無條件領土相鄰，那麼其無條件狀態亦被設為 ALIVE。除此之外的所有情
+  況，無條件狀態都被設為 UNKNOWN。
+
+  要理解這些定義，重要的是要注意，任何普通意義上的活棋通過一系列連續的落子，都能
+  轉變成無敵狀態（invincible）。當然，也有少數情況是例外，比如“雙活”。可以通過
+  一些稍微複雜的算法來避免這個問題，但這將留待以後的修改。
+
+- int attack_points[MAX_TACTICAL_POINTS]
+- attack_codes[MAX_TACTICAL_POINTS]
+- int defense_points[MAX_TACTICAL_POINTS];
+- int defend_codes[MAX_TACTICAL_POINTS];
+
+  當戰術解讀碼（tactical reading code）發現一串棋子可被攻擊，attack_points[0] 是
+  攻擊點，attack_codes[0] 是攻擊碼，WIN，KO_A 或者 KO_B。對於已知的多重打擊，
+  attack_points[k] 和 attack_codes[k] 將被使用。對於防守碼和防守點也有相似的定義。
+
+- int attack_threat_points[MAX_TACTICAL_POINTS];
+- int attack_threat_codes[MAX_TACTICAL_POINTS];
+- int defense_threat_points[MAX_TACTICAL_POINTS];
+- int defense_threat_codes[MAX_TACTICAL_POINTS];
+
+  這些點威脅攻擊或保護一串棋子。
+
+函數 makeworms() 將會產生所有串的數據。
+
+** 合併
+
+如前所述，龍是一組被視為一個整體的棋子，這些棋子將共同生存或死亡。因此如果對方的
+一串棋子被視為一條龍，則程序不會期待去切斷它。
+
+函數 make_dragons() 會通過維護包含相似數據的獨立數組 worm[] 和 dragon[] 將棋子串
+合併成龍。
+
+在 GNU Go 中合併棋子串的操作如下。首先，我們合併一個眼型的所有邊界部分。因此，在
+下面的例子中：
+
+#+BEGIN_EXAMPLE
+    .OOOO.          四個 X 棋子串被合併進龍， 因為它們是龍的邊界眼洞的一部分。
+    OOXXO.          眼洞可能包含無關緊要的棋子串，對這種合併沒有影響。
+    OX..XO
+    OX..XO
+    OOXXO.
+    XXX...
+#+END_EXAMPLE
+
+這種類型合併的代碼在例程 dragon_eye() 中，在 EYES 中進一步討論。
+
+接下來，我們合併看似不可分的棋子串。我們將合併具有兩個或者更多公共氣的龍，或者與
+對方有一個公氣，但是對方卻不可以在不被提取的情況下落子的情形。（忽略打劫情況。）
+
+#+BEGIN_EXAMPLE
+   X.    X.X     XXXX.XXX         X.O
+   .X    X.X     X......X         X.X
+                 XXXXXX.X         OXX
+#+END_EXAMPLE
+
+連接模式的數據庫可以在路徑 ‘patterns/conn.db’ 下找到。
+
+** 連接
+
+#+BEGIN_SRC c
+  /* engine: liberty.h */
+  struct eye_data {
+      int color;             /* BLACK, WHITE, or GRAY                     */
+      int esize;             /* size of the eyespace                      */
+      int msize;             /* number of marginal vertices               */
+      int origin;            /* The origin                                */
+      struct eyevalue value; /* Number of eyes.                           */
+
+      /* The above fields are constant on the whole eyespace.             */
+      /* ---------------------------------------------------------------- */
+      /* The below fields are not.                                        */
+
+      unsigned char marginal;             /* This vertex is marginal               */
+      unsigned char neighbors;            /* number of neighbors in eyespace       */
+      unsigned char marginal_neighbors;   /* number of marginal neighbors          */
+  };
+
+  /* engine: global.c */
+  struct eye_data       black_eye[BOARDMAX];
+  struct eye_data       white_eye[BOARDMAX];
+#+END_SRC
+
+  字段 black_eye.cut 和 white_eye.cut 被設置為對方可以通過 'conn.db' 中的 B 類模
+  式(Break class) 完成切斷。這個字段有兩個重要重要用途，可以通過 autohelper_func
+  結構體數組中的 xcut() 和 ocut() 函數來訪問。首先，它可以用於停止對以下形狀的合併：
+
+  #+BEGIN_EXAMPLE
+..X..
+OO*OO
+X.O.X
+..O..
+  #+END_EXAMPLE
+
+  當 X 方可以落子在 =*= 處去切斷任何一方，當第一個連接模式 CB1 時發現了脆弱的雙
+  連接狀態，並且標註 =*= 為切斷點。稍後， 將在 'conn.db' 搜索 C 類（connection）
+  模式，以找到合併龍的安全連接。通常情況下，對角連接（小尖）被視為安全的，并被連
+  接模式 CC101 合併，但是有一個約束條件是任何一個空的交叉點都不是一個切斷點。
+
+#+BEGIN_EXAMPLE
+Pattern CC101
+
+.O
+O.
+#+END_EXAMPLE
+
+  這個方案（CB1）的缺點是 X 只能切斷一處連接，而不是同時切斷兩邊。因此我們將允許
+  通過連接模式 CC401 來合併其中一處連接，這個連接模式通過函數
+  amalgamate_most_valuable_helper() 選擇連接哪一邊。（猜測具有較大價值的一邊。）
+
+  另一個用途是簡化對實體連接的可選連接模式。diag_miai 通過連接模式 12 輔助思考一
+  個連接是否有必要被標記為斷點。因此我們可以寫出一個類似 CC6 的連接模式：
+
+#+BEGIN_EXAMPLE
+?xxx?     straight extension to connect
+XOO*?
+O...?
+
+:8,C,NULL
+
+?xxx?
+XOOb?
+Oa..?
+
+;xcut(a) && odefend_against(b,a)
+#+END_EXAMPLE
+
+=*= 處將被定義為防禦切斷。
+
+** 半眼和假眼
+
+半眼是指當我方落子時將變為真眼，但對方落子時將不能成為真眼的眼形；假眼是指可以被
+對方破壞的眼形。注：雖然通常需要兩隻真眼才可活棋，但在某些特殊情況下，兩個假眼也
+可以活棋（兩頭蛇、盤龍活）。以下是半眼的情況：
+
+#+BEGIN_EXAMPLE
+XXXXX
+OO..X
+O.O.X
+OOXXX
+#+END_EXAMPLE
+
+以下是一個假眼：
+
+#+BEGIN_EXAMPLE
+XXXXX
+XOO.X
+O.O.X
+OOXXX
+#+END_EXAMPLE
+
+“拓撲”算法描述了如何確定半眼或假眼（參見[[topology_of_eyes][Topology of Half Eyes and False Eyes]]）
+
+半眼數據收集在龍陣列中。在此之前，在名為 half_eye_data 的輔助數組中填充了信息。
+字段 type 為 0、HALF_EYE、或者 FALSE_EYE 取決於眼是哪一種類型；字段
+attack_point[] 指向了最多可以攻擊半眼的四個點，類似的 defense_point[] 給出了半眼
+的防禦點。
+
+#+BEGIN_SRC c
+struct half_eye_data half_eye[MAX_BOARD];
+
+struct half_eye_data {
+  float value;          /* Topological eye value. */
+  unsigned char type;   /* HALF_EYE or FALSE_EYE; */
+  int num_attacks;      /* number of attacking points */
+  int attack_point[4];  /* the moves to attack a topological halfeye */
+  int num_defenses;     /* number of defending points */
+  int defense_point[4]; /* the moves to defend a topological halfeye */
+};
+#+END_SRC
+
+陣列 =struct half_eye_data half_eye[MAX_BOARD]=包含了關於半眼和假眼的信息。如果
+類型為 HALF_EYE 則最多記錄 4 個落子點，可以用於攻擊或保護眼位。極少情況攻擊點不
+同於防禦點。
+
+** Dragons
+陣列 =struct dragon_data dragon[MAX_BOARD]= 收集了關於龍的信息。我們將會給出各個
+字段的含義。每一個字段對於龍的每個頂點具有固定值。（我們將在下面討論字段。）
+
+#+BEGIN_SRC c
+/*
+ * data concerning a dragon. A copy is kept at each stone of the string.
+ */
+
+struct dragon_data {
+  int color;    /* its color                                                 */
+  int id;       /* the index into the dragon2 array                          */
+  int origin;   /* the origin of the dragon. Two vertices are in the same    */
+                /* dragon iff they have same origin.                         */
+  int size;     /* size of the dragon                                        */
+  float effective_size; /* stones and surrounding spaces                     */
+  enum dragon_status crude_status; /* (ALIVE, DEAD, UNKNOWN, CRITICAL)       */
+  enum dragon_status status;       /* best trusted status                    */
+};
+
+extern struct dragon_data dragon[BOARDMAX];
+#+END_SRC
+
+附加到龍的其他字段包含在結構體陣列 =dragon_data2= 中。（以下將討論字段。）
+
+#+BEGIN_SRC c
+struct dragon_data2 {
+  int origin;                         /* the origin of the dragon            */
+  int adjacent[MAX_NEIGHBOR_DRAGONS]; /* adjacent dragons                    */
+  int neighbors;                      /* number of adjacent dragons          */
+  int hostile_neighbors;              /* neighbors of opposite color         */
+
+  int moyo_size;		      /* size of surrounding influence moyo, */
+  float moyo_territorial_value;       /* ...and its territorial value        */
+  enum dragon_status safety;          /* a more detailed status estimate     */
+  float weakness;           /* a continuous estimate of the dragon's safety  */
+  float weakness_pre_owl;   /* dragon safety based on pre-owl computations   */
+  float strategic_size; /* An effective size including weakness of neighbors */
+  int escape_route;         /* a measurement of likelihood of escape         */
+  struct eyevalue genus;    /* the number of eyes (approximately)            */
+  int heye;     /* coordinates of a half eye                                 */
+  int lunch;    /* if lunch != 0 then lunch points to a boundary worm which  */
+                /* can be captured easily.                                   */
+  int surround_status;         /* Is it surrounded?                          */
+  int surround_size;           /* Size of the surrounding area               */
+
+  int semeais;         /* number of semeais in which the dragon is involved  */
+  int semeai_defense_code ;/* Result code for semeai defense.                */
+  int semeai_defense_point;/* Move found by semeai code to rescue dragon     */
+  int semeai_defense_certain;
+  int semeai_defense_target; /* The opponent dragon involved in the semeai   */
+  int semeai_attack_code ; /* Result code for semeai attack.                 */
+  int semeai_attack_point; /* Move found by semeai code to kill dragon       */
+  int semeai_attack_certain;
+  int semeai_attack_target; /* The opponent dragon involved in the semeai    */
+  enum dragon_status owl_threat_status; /* CAN_THREATEN_ATTACK/DEFENSE       */
+  enum dragon_status owl_status; /* (ALIVE, DEAD, UNKNOWN, CRITICAL, UNCHECKED)    */
+  int owl_attack_point;    /* vital point for attack                         */
+  int owl_attack_code;     /* ko result code                                 */
+  int owl_attack_certain;  /* 0 if owl reading node limit is reached         */
+  int owl_attack_node_count;
+  int owl_second_attack_point;/* if attacker gets both attack points, wins   */
+  int owl_defense_point;   /* vital point for defense                        */
+  int owl_defense_code;    /* ko result code                                 */
+  int owl_defense_certain; /* 0 if owl reading node limit is reached         */
+  int owl_second_defense_point;/* if defender gets both attack points, wins  */
+  int owl_attack_kworm;    /* only valid when owl_attack_code is GAIN        */
+  int owl_defense_kworm;   /* only valid when owl_defense_code is LOSS       */
+};
+
+/* dragon2 is dynamically allocated */
+extern int number_of_dragons;
+extern struct dragon_data2 *dragon2;
+#+END_SRC
+
+兩個陣列不同之處在於 =dragon= 陣列是由棋盤索引的，並且龍的每個棋子上都有一個數據
+的副本，而 =dragon2= 數據只有一個副本。 =dragons= 被編號，並且 =id= 字段是進入
+=dragon2= 陣列的鍵值，提供了兩個宏 DRAGON 和 DRAGON2，用於訪問這兩個數組：
+
+#+BEGIN_SRC c
+#define DRAGON2(pos) dragon2[dragon[pos].id]
+#define DRAGON(d) dragon[dragon2[d].origin]
+#+END_SRC
+
+因此，如果你知道棋子在龍之中的位置，就可以直接訪問龍陣列，例如使用
+=dragon[pos].origin= 訪問起源。但是，如果你需要來自 =dragon2= 的字段，你可以使用
+DRAGON2 宏來訪問它，比如你可以訪問鄰近的龍：
+
+#+BEGIN_SRC c
+  for (k = 0; k < DRAGON2(pos).neighbors; k++) {
+      int d = DRAGON2(pos).adjacent[k];
+      int apos = dragon2[d].origin;
+      do_something(apos);
+  }
+#+END_SRC
+
+同樣如果你知道龍的編號（即 =dragon[pos].id= ），就可以直接訪問 =dragon2= 陣列，
+或者使用 DRAGON 宏來訪問。
+
+這裡是 =dragon= 陣列中每個字段的含義：
+
+- color
+
+  龍的顏色。
+
+- id
+
+  龍的編號以及進入 =dragon2= 的鍵值。
+
+- origin
+
+  龍的起源是指一個獨特的頂點，用於確定兩個頂點何時屬於同一條龍。在合併之前，串的
+  起源被複製到龍的起源。兩條龍的合併就是改變其中一條龍的起源。
+
+- size
+
+  龍之中的棋子數目。
+
+- effective size
+
+  組成龍的蟲，其有效尺寸之和。注意蠕蟲的有效尺寸包含了等距離的空交叉點，因此龍的
+  有效尺寸包含了基數再加上接近的空交叉點數。
+
+- crude_status
+
+  (ALIVE, DEAD, UNKNOWN, CRITICAL). 龍的生命潛力的早期預測。它是在 owl 代碼運行
+  之前進行計算，並在狀態變為可用時由狀態取代。
+
+- status
+
+  龍的狀態是衡量龍的健康的最後標註。它在運行 owl 代碼之後進行計算，然後在運行運
+  行 semeai 代碼時再次修改。
+
+以下是 dragon2 陣列中的字段定義。
+
+- origin
+
+  和 dragon 中的 origin 字段定義相同。
+
+- adjacent
+- adjacent[MAX_NEIGHBOR_DRAGONS]
+
+  在給定一種顏色附近的龍被稱為鄰居。它們通過函數 =find_neighbor_dragons()= 計算。
+  dragon2.adjacent 數組給出了這些龍的數量。
+
+- neighbors
+
+  鄰近龍的數量。
+
+- hostile_neighbors
+
+  相反顏色的鄰近龍的數量。
+
+- moyo_size
+- float moyo_territorial_value
+
+  函數 =compute_surrounding_moyo_sizes()= 為每條龍周圍的 moyo 指定一個大小和一個
+  地域值 （參閱 [[territory][Territory, Moyo and Area]] ）。
+
+- safely
+
+  龍的安全可言承擔其中一個價值：
+
+  - TACTICALLY_DEAD - 由單個蠕蟲組成的龍，由 reading code 發現死亡 （非常可靠）。
+
+  - ALIVE - 有 owl 或 semeai 代碼發現存活。
+
+  - STRONGLY_ALIVE - 存活沒有太多問題。
+
+  - INVINCIBLE - 即使一直脫先也可以存活。
+
+  - ALIVE_IN_SEKI - 由 semeai 代碼發現為共活。
+
+  - CRITICAL - 生或死取決於誰落子。
+
+  - DEAD - 由 owl 代碼發現死棋。
+
+  - INESSENTIAL - 龍是無關緊要的（如 nakade stones）和死子。
+
+- weakness
+- weakness_pre_owl
+
+  用於衡量龍的安全性的浮點值。龍的弱點是一個介於 0. 和 1. 之間的數字，數字越大說
+  明對安全性的要求更高。字段 weakness_pre_owl 是 owl 代碼運行之前的初步計算。
+
+- escape_route
+
+  當不能就地做活時，評估龍逃生的可能性。文檔可以在[[escape][escape]]中找到。
+
+- struct eyevalue genus
+
+  預計龍可以得到的大概眼位數量。不能保證是準確的。整個引擎中使用的 eyevalue 結構
+  體聲明如下：
+
+#+BEGIN_SRC c
+struct eyevalue {
+  unsigned char a; /* number of eyes if attacker plays first twice */
+  unsigned char b; /* number of eyes if attacker plays first */
+  unsigned char c; /* number of eyes if defender plays first */
+  unsigned char d; /* number of eyes if defender plays first twice */
+};
+#+END_SRC  
+
+- heye
+
+  連接到龍的半隻眼的位置。
+
+- lunch
+
+  如果非零，這是可以被吃掉的邊界棋子串的位置。與蠕蟲 lunches 相反，一個龍的
+  lunch 必須能夠自我防禦。
+
+- surround_status
+- surround_size
+
+  去評估龍是否安全的一個重要因素是知道其是否被包圍。在[[surround][Surrounded and Dragons]]中以
+  及 'surround.c' 的注釋可以看到關於“包圍”算法的更詳細信息。此字段用於計算
+  escape_route，也可以從模式中調用（目前由CB258使用）。
+
+- semeais
+- semeai_defense_point
+- semeai_defense_certain
+- semeai_attack_point
+- semeai_attack_certain
+
+  如果兩條糾纏的相反顏色的龍同時處於 CRITICAL 或 DEAD 狀態，則稱之為 semeai （對
+  殺），並且它們的狀態必須由 ‘owl.c' 中的函數 owl_analyze_semeai() 來判定，它試
+  圖確定哪些是活棋，哪些是死棋，或者共活，以及誰先落子是否重要。’semeai.c'中的
+  函數 ‘new_semeai()’ 嘗試修訂狀態並基於這些結果生成走子原因。如果龍處於對殺狀
+  態，字段 dragon2.semeais 的值非零，並且等於對殺的數目（很少超過1）。對殺的防守
+  和攻擊點是防守者或攻擊者為贏得對殺而必須落子的點。字段 semeai_margin_of_safety
+  旨在表明對殺是否結束，但目前該字段未被維護。字段 semeai_defense_certain 和
+  semeai_attack_certain 表明 semeai 代碼能夠完成分析而不會耗盡節點。
+
+- owl_status
+
+  這是一個類似于 dragon.crude_status 的分類，但是基於對代碼 'owl.c' 中對死活的解
+  讀。 owl 代碼 （參見章節[[owl][The Owl Code]]）被跳過，因為某些啟發式代碼似乎是安全的。
+  由於 owl 代碼未運行，因此 owl 狀態是 UNCHECKED。如果 owl_attack() 確定龍不能被
+  攻擊，則被分類為 ALIVE。否則，運行 owl_defend()，如果可以的話，狀態就是
+  CRITICAL，如果不能，就被歸類為 DEAD。
+
+- owl_attack_point
+
+  龍受攻擊的點。
+
+- owl_attack_code
+
+  owl 攻擊代碼，可以使 WIN，KO_A，KO_B，或者0。（參考 [[return_code][Return Codes]]）。
+
+- owl_attack_certain
+
+  owl 代碼能夠完成攻擊分析而不會耗盡節點。
+
+- owl_second_attack_point
+
+  第二個攻擊點。
+
+- owl_defense_point
+
+  龍的防守點。
+
+- owl_defense_code
+
+  owl 防守代碼，可以使 WIN，KO_A，KO_B，或者0。（參考 [[return_code][Return Codes]]）。
+
+- owl_defense_certain
+
+  owl 代碼能夠完成防守分析而不會耗盡節點。
+
+- owl_second_defense_point
+
+  第二個防守點。
+
+** 龍的色彩顯示
+
+你可以得到一個彩色的 ASCII 顯示棋盤，其中每條龍被分配一個不同的字母，以及
+dragon.status 不同的值（ALIVE, DEAD, UNKNOWN, CRITICAL）有不同的顏色，這對於調試
+非常方便。第二個圖顯示了 owl.status 的值，如果是 UNCHECKED 則龍顯示為白色。
+
+使用 CGoban 將棋局保存為 sgf 格式，或者使用 GNU Go 自身的 '-o' 選項來保存棋局。
+
+打開 xterm 或者 rxvt 窗口，或者使用 Linux 控制台。通過控制台，你可以使用
+"SHIFT-PgUp"來看第一個圖。Xterm 只有當編譯時顏色支持的情況下才能使用 -- 如果您看
+不到顏色，請嘗試 rxvt。使背景色為黑色，前景色為白色。
+
+執行：
+
+#+BEGIN_SRC sh
+gnugo -l [filename] -L [movenum] -T
+#+END_SRC
+
+來獲得顏色顯示。
+
+配色方案：綠色 = ALIVE；黃色 = UNKNOWN；青色 = DEAD 以及 紅色 = CRITICAL。已經合
+併成同一條龍的蠕蟲標有相同字母。
+
+其他有用的彩色顯示可以通過使用：
+
+- 選項 -E 顯示眼位空間 （參考 [[eyes_and_halfeyes][Eyes and HalfEyes]]）。
+- 選項 -m 0x0180 顯示領土、moyo和地區（參考 [[territory][Territory, Moyo and Area]]）。
+
+彩色顯示也被記錄在別處（參考 [[colored_display][Colored Displayed]]）。
+
+<<eyes_and_halfeyes>>
+<<topology_of_eyes>>
+<<territory>>
+<<escape>>
+<<surround>>
+<<owl>>
+<<return_code>>
+<<colored_display>>
