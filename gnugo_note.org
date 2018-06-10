@@ -133,14 +133,13 @@ X 區域應被視為一個單組（a single group），並有一個含三個交�
   以下的形狀對應的氣及其高階形式表達如下：
 
   #+BEGIN_EXAMPLE
-
           .XX...    We label the     .XX.4.
           XO....    liberties of     XO1234
           XO....    order < 5 of     XO1234
           ......    the O group:     .12.4.
           .X.X..                     .X.X..
-
   #+END_EXAMPLE
+
 
   高階氣的周圍不能有相反顏色的棋子，意味著棋子可以有跳、大跳、飛、大飛等活動，可
   以用於評估串是否被包圍。
