@@ -556,8 +556,8 @@ DRAGON2 宏來訪問它，比如你可以訪問鄰近的龍：
 - =moyo_size=
 - =float moyo_territorial_value=
 
-  函數 =compute_surrounding_moyo_sizes()= 為每條龍周圍的 moyo 指定一個大小和一個
-  地域值 （參閱 [[territory][Territory, Moyo and Area]] ）。
+  函數 =compute_surrounding_moyo_sizes()= 為每條龍周圍的模樣指定一個大小和一個地
+  域值 （參閱 [[territory][Territory, Moyo and Area]] ）。
 
 - =safely=
 
@@ -565,7 +565,7 @@ DRAGON2 宏來訪問它，比如你可以訪問鄰近的龍：
 
   - =TACTICALLY_DEAD= - 由單個蠕蟲組成的龍，由 reading code 發現死亡 （非常可靠）。
 
-  - =ALIVE= - 由 owl 或 semeai 代碼發現存活。
+  - =ALIVE= - 由 owl 或 semeai（對殺） 代碼發現存活。
 
   - =STRONGLY_ALIVE= - 存活沒有太大問題。
 
@@ -601,7 +601,7 @@ struct eyevalue {
   unsigned char c; /* number of eyes if defender plays first */
   unsigned char d; /* number of eyes if defender plays first twice */
 };
-#+END_SRC  
+#+END_SRC
 
 - =heye=
 
@@ -702,7 +702,7 @@ gnugo -l [filename] -L [movenum] -T
 其他有用的彩色顯示可以通過使用：
 
 - 選項 -E 顯示眼位空間 （參考 [[eyes_and_halfeyes][Eyes and HalfEyes]]）。
-- 選項 -m 0x0180 顯示領土、moyo和地區（參考 [[territory][Territory, Moyo and Area]]）。
+- 選項 -m 0x0180 顯示領土、模樣和地區（參考 [[territory][Territory, Moyo and Area]]）。
 
 關於彩色顯示也可以參考其他地方（參考 [[colored_display][Colored Displayed]]）。
 
@@ -746,7 +746,7 @@ gnugo -l [filename] -L [movenum] -T
 這裡以一局遊戲為例：
 
 #+BEGIN_EXAMPLE
- |. X . X X . . X O X O 
+ |. X . X X . . X O X O
  |X . . . . . X X O O O
  |O X X X X . . X O O O
  |O O O O X . O X O O O
@@ -763,7 +763,7 @@ gnugo -l [filename] -L [movenum] -T
 交叉點標記如下：
 
 #+BEGIN_EXAMPLE
- |- X - X X - - X O X O 
+ |- X - X X - - X O X O
  |X - - - - - X X O O O
  |O X X X X - - X O O O
  |O O O O X - O X O O O
@@ -826,16 +826,117 @@ xX.!
 
 RULE 1： ='O'= 在落子時會刪除標記為 ='!'= 或 ='.'= 的交叉點。
 RULE 2： ='X'= 在落子時將會替換 ='.'= 替換為 ='X'= 。
-RULE 3： ='X'= 將刪除 ='!'= 節點。在這種情況下，每一個鄰接被刪除的 ='!'= 的
+RULE 3： ='X'= 可以刪除 ='!'= 節點。在這種情況下，與被刪除的 ='!'= 相鄰的
 ='.'= 交叉點都將被替換為 ='!'= 。如果一個 ='X'= 毗鄰被刪除的 ='!'= ，那麼 ='X'=
 和任何連接到它的 ='X'= 也被刪除。與被刪除的 ='X'= 相鄰的任何 ='.'= 保持不變，仍
 為 ='.'= 。
 
+因此如果 ='O'= 先手，則他可以將眼位變成如下形狀：
+
+#+BEGIN_EXAMPLE
+(start)
+!...
+  .XXX.!
+
+('O' moves first)
+ ...            or      !...
+  .XXX.!                  .XXX.
+#+END_EXAMPLE
+
+但如果 ='X'= 先落子，他可能會移除 ='!'= 從而鄰近 ='!'= 的 ='.'= 將會變成 ='!'=
+。因此如果 ='X'= 先手，則眼位可以變成如下形狀：
+
+#+BEGIN_EXAMPLE
+(start)
+!...
+  .XXX.!
+
+('X' moves first)
+ !..            or      !...
+  .XXX.!                  .XXX!
+#+END_EXAMPLE
+
+注意：在 ‘X:1’，‘O:2’ 交替落子之後有一個細微差別， ='O'= 威脅著捕獲三顆 X 棋
+子，因此在 2 的位置左邊有半隻眼。 [fn::譯者注：作者此處的意思可能指如果 X 棋子是
+死子，那麼 2 的位置隱藏著半隻眼。] 這是微妙的，並且仍有其他類似的微妙之處使得我
+們的抽象描述無法概括。但至少有一些可以通過對方案的改進來處理，所以我們暫時可以滿
+足這個簡化的模型。
+
+#+BEGIN_EXAMPLE
+ |- X - X X - - X O X O
+ |X - - - - - X X O O O
+ |O X X X X - - X O O O
+ |O O O O X - O X O O O
+ |1 2 . . O O O O X X O
+ |X O . X X X . 3 X O O
+ |X O O O O O O O X X O
+ |- X X O - O X O - - X
+ |X - - X - X X X X X X
+ |O X X O X - X O O X O
+#+END_EXAMPLE
+
+我們沒有試圖去說明本地博弈的終止狀態（有些可能是共活）或者評分。
+
+** 一個例子
+這是一個本地博弈，無論誰先落子，都只會產生一隻眼：
+
+#+BEGIN_EXAMPLE
+!
+...
+...!
+#+END_EXAMPLE
+
+以下是幾種變化，假設 ='O'= 先走。
+
+#+BEGIN_EXAMPLE
+!        (start position)
+...
+...!
 
 
+...      (after ‘O’'s move)
+...!
 
 
+...
+..!
 
+
+...       (刀把五)
+..
+
+
+.X.       (點殺)
+..
+#+END_EXAMPLE
+
+另一種變化：
+
+#+BEGIN_EXAMPLE
+!         (start)
+...
+...!
+
+
+!         (after ‘O’'s move)
+. .
+...!
+
+
+!         (after ‘X’'s move)
+. .
+..X!
+
+
+. .
+..X!
+
+
+. !
+.!
+#+END_EXAMPLE
+
+** 圖
 
 <<topology_of_eyes>>
 <<territory>>
