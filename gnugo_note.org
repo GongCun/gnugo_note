@@ -1301,7 +1301,7 @@ e >= 4     - 假眼
 (i)   a=1/2, b=3/2
 #+END_EXAMPLE
 
-但事實證明這有一些缺陷，也可以嘗試以下任何一組值：
+但事實證明這有一些缺陷，也可以嘗試以下幾組值：
 
 #+BEGIN_EXAMPLE
 (ii)  a=2/3, b=4/3
@@ -1329,6 +1329,106 @@ case    symbolic        a=1/2   a=2/3   a=3/4   a=4/5   desired
 (e'')   2+2b            5       4.67    4.5     4.4     4 < e
 #+END_EXAMPLE
 
+此處作者花了大量筆墨討論合適的取值，從而得到 =a=3/4= 或者 =a=1/2= 的結論。由於一
+個眼形中同時出現三劫的情況非常少見，因此作者不做討論。從禁止同形反復的規則來說，
+電腦計算的變化應該避免出現三劫的情況。
+
+本章讓譯者不解的是，為什麼要通過估值而不是通過概率來區分眼位的價值？比如定義條件
+概率：假眼變成真眼的概率為0，半眼變成真眼的概率為1/2，真眼本身就是真眼（概率為1）。
+那麼首先討論 =(b)= 圖：
+
+#+BEGIN_EXAMPLE
+      .X..
+(b)   .XOO
+      OO.O
+      O.OO
+      XOX.
+      .X..
+#+END_EXAMPLE
+
+對於 ='O'= 來說，記：
+
+\begin{eqnarray*}
+A   & = & {先手}\\
+A^c & = & {後手}\\
+B   & = & {真眼}
+\end{eqnarray*}
+
+那麼對於 =(b)= 圖可以畫出以下序貫圖：
+
+#+CAPTION: probability tree of (b)
+[[file:./prob_tree_b.jpg]]
+
+注意在葉子 =P= 處出現了遞歸，利用概率可加性：
+
+\begin{eqnarray*}
+P(B) & = & \frac{1}{4}P(B) + \frac{1}{2} \\
+P(B) & = & \frac{2}{3}
+\end{eqnarray*}
+
+可以對眼位的對角點使用相同的方法推斷概率，為了方便分析，定義：
+
+適眼：後手落子，仍然有 50% 或以上可能性成為真眼的眼位（$P(B|A^c) \geq 50%$）。
+
+失眼：先手落子，仍然不超過 50% 的可能性成為真眼的眼位（$P(B|A) \leq 50%$）。
+
+對於圖 =(a)= ：
+
+#+BEGIN_EXAMPLE
+      .X..
+(a)   .aOO
+      OO.O
+      ObOO
+      XOX.
+      .X..
+#+END_EXAMPLE
+
+由於先手必定形成真眼，只考慮後手的情況： ='X'= 有a、b兩個可選的落點，對於落點a，
+='O'= 形成真眼的概率已論證為 2/3，對於落點b，就會形成 =(a')= 圖：
+
+#+BEGIN_EXAMPLE
+      .X..
+(a')  ..OO
+      OO.O
+      OXOO
+      X.X.
+      .X..
+#+END_EXAMPLE
+
+對於圖 =(a')= ， ='O'= 先手可以形成真眼， 後手形成真眼的概率為 1/3，因此對於圖
+=(a)= 可以畫出序貫圖：
+
+#+CAPTION: probability tree of (a)
+[[file:./prob_tree_a.jpg]]
+
+這樣：
+
+$$P(B|A^c) = \frac{1}{2} \times \frac{2}{3} + \frac{1}{2} \times \frac{2}{3} =
+\frac{2}{3}$$
+
+因此
+
+$$P(B) = \frac{1}{2} + \frac{1}{2} \times \frac{2}{3} = \frac{5}{6}$$
+
+我們仍然可以繼續考察圖 =(c)= 的 $P(B|A^c)$ ，事實上由於對稱性，圖 =(c)= 的
+$P(B|A^c)$ 和 圖 =(c')= 的 $P(B)$ 相同，由於對於圖 =(c')= 來說，先手必形成一隻真
+眼，仍然只考慮圖 =(c')= 的 $P(B|A^c)$ ：
+
+#+BEGIN_EXAMPLE
+      .X..           .X..
+      XOX.           XOX.
+(c)   O.OO     (c')  OaOO
+      OO.O           OO.O
+      O.OO           OXOO
+      XOX.           XbX.
+      .X..           .X..
+#+END_EXAMPLE
+
+當 ='X'= 落于 a 處時，如果 ='O'= 先手則形成真眼（搖頭劫），如果 ='O'= 後手則形成
+真眼概率為 1/3；當 ='X'= 落于 b 處時， ='O'= 形成真眼的概率為 2/3。這樣對於圖
+=(c')= ，P(B) = 2/3，對於圖 =(c)= ，P(B) = 5/6。
+
+** 偽邊界
 
 <<territory>>
 <<escape>>
@@ -1336,3 +1436,5 @@ case    symbolic        a=1/2   a=2/3   a=3/4   a=4/5   desired
 <<owl>>
 <<return_code>>
 <<colored_display>>
+
+
