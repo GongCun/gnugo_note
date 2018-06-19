@@ -1429,6 +1429,21 @@ $P(B|A^c)$ 和 圖 =(c')= 的 $P(B)$ 相同，由於對於圖 =(c')= 來說，�
 =(c')= ，P(B) = 2/3，對於圖 =(c)= ，P(B) = 5/6。
 
 ** 偽邊界
+以下情況很少見，但需要特別注意：
+
+#+BEGIN_EXAMPLE
+   OOOOXX
+   OXaX..
+   ------
+#+END_EXAMPLE
+
+這裡 ='a'= 由於和 ='O'= 的眼位相鄰，並且毗鄰不能被攻擊的 ='X'= 棋子，但是 ='X'=
+落子在 ='a'= 處將造成接不歸，因此我們稱 ='a'= 是偽邊界。
+
+由於這個原因， ='O'= 的眼形應該解析為 =(X)= ，而不是 =(X!)= 。
+
+** ='optics.c'= 中的函數
+待譯
 
 <<territory>>
 <<escape>>
@@ -1436,5 +1451,101 @@ $P(B|A^c)$ 和 圖 =(c')= 的 $P(B)$ 相同，由於對於圖 =(c')= 來說，�
 <<owl>>
 <<return_code>>
 <<colored_display>>
+
+* Monte Carlo Go
+Monte Carlo Go 引擎將隨機落子到最後，基於 UCT 算法（upper confidence bounds
+applied to trees，上限置信區間演算法）從模式數據庫中產生落子點。這個算法使得
+=MoGo= 成為第一個在 9 路棋盤上擊敗專家的程序。
+
+#+CAPTION: Steps of Monte Carlo tree search (won/played)
+[[file:./MCTS.jpg]]
+
+GNU Go 3.8 可以在 9x9 棋盤上通過選項 ='--monte-carlo'= 來使用 UCT 算法。
+
+在解讀的過程中，對於每一次落子，引擎會對局部的 3x3 鄰域進行增量更新，如自填滿狀
+態、倒撲、以及提子個數等。
+
+GNU Go 的模擬 （MC遊戲）是模式生成的。隨機生成的移動嚴格地與 3x3 鄰域組成的局部
+場景中的表查找所計算出的移動值成比例分佈，局部場景包括包括對手的自殺狀態，自身及
+對手的倒撲狀態，被自身或對手提子的個數，以及與前一次移動的接近程度等。我們將局部
+場景簡稱為“一個模式（a pattern）”，將“模式值”表簡稱為“圖案（patterns）”。
+
+GNU Go 有三種內置的數據庫，可以通過選項 ='--mc-patterns <name>'= 來指定，
+='<name>'= 是以下其中之一：
+
+=montegnu_classic=\\
+=mogo_classic=    \\
+=uniform=         
+
+第一個是之前的隨機移動算法生成的近似值。 =mogo_classic= 模式值是對 MoGo 早期版本
+所使用的模擬策略的近似值，由論文 [[https://hal.inria.fr/inria-00117266][Modiﬁcation of UCT with Patterns in Monte-Carlo
+Go]] 所發表。而 =uniform= 模式值是所謂的“輕（light）”模擬，在除了單個真眼之外的所有合法移
+動之中均勻地選擇。
+ [fn:: 譯者注：“重（heavy）”模式是指採用各種啟發式算法來影響走子的選擇。根據譯
+者測試，似乎 $uniform > montegnu\_classic \approx mogo\_classic$]
+
+如果您不滿意，您還可以調整模式數據庫文件中的模式值，並在運行時使用
+='--mc-patterns <name>'= 指定您自己的模式數據庫。
+
+我們先從 =uniform= 模式值開始討論，它們定義在文件 ='patterns/mc_uniform.db'= ，
+看上去類似以下：
+
+#+BEGIN_EXAMPLE
+oOo
+O*O
+oO?
+
+:0
+
+oOo
+O*O
+---
+
+:0
+
+|Oo
+|*O
++--
+
+:0
+#+END_EXAMPLE
+
+圖案的大小總是 3x3，以落子點為中心。這些符號通常用於 GNU Go 模式數據庫：
+
+#+BEGIN_EXAMPLE
+  * move
+  O own stone (i.e. the same color as the color to move)
+  o own stone or empty
+  X opponent stone
+  x opponent stone or empty
+  ? own stone, opponent stone, or empty
+  | vertical edge
+  - horizontal edge
+  + corner
+#+END_EXAMPLE
+
+這裡有一個新的符號：
+
+#+BEGIN_EXAMPLE
+  % own stone, opponent stone, empty, or edge
+#+END_EXAMPLE
+
+在模式圖案之後是以冒號開始的行。所有的圖案都將走子價值標記為 0，即為不能落子。不
+匹配的圖案默認價值為1.當所有走子價值對於雙方都是0時，仿真將結束。以上三種模式非
+常重要，否則仿真將可無期限地進行下去，或者實際上會以硬編碼的600次移動上限而終止
+仿真。同時還要將這些模式放在數據庫的頂部，因為當多個模式匹配時，都會使用第一個模
+式，無論其值是多少。
+
+當使用這些模式時您可能會發現它的走子很“重”（不輕盈），總是試圖保持堅固的連接。
+這是由於 uniform 仿真出現嚴重偏差，不牢固的連接被切斷的可能性很大。為了解決這個
+問題，您可以嘗試一個模式：
+
+#+BEGIN_EXAMPLE
+?X?
+O*O
+x.?
+
+:20,near
+#+END_EXAMPLE
 
 
