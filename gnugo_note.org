@@ -1538,7 +1538,7 @@ O*O
 
 當使用這些模式時您可能會發現它的走子很“重”（不輕盈），總是試圖保持堅固的連接。
 這是由於 uniform 仿真出現嚴重偏差，不牢固的連接被切斷的可能性很大。為了解決這個
-問題，您可以嘗試一個模式：
+問題，您可以嘗試如下的模式來增加受到威脅時單跳的可能性：
 
 #+BEGIN_EXAMPLE
 ?X?
@@ -1548,4 +1548,107 @@ x.?
 :20,near
 #+END_EXAMPLE
 
+在這裡，我們增加了“near”屬性，意味著該模式僅僅適用於本次落點“接近”于先前的落
+點。“near”主要是指在 3x3 鄰域內，但也包括某些情況如氣緊的棋子接近之前的落子點，
+比如長出被打吃的棋子，該棋子是先前的落子。你必須閱讀源代碼以找出“接近”的確切含
+義。
+
+我們也可以更具體地說：
+
+#+BEGIN_EXAMPLE
+?X?
+O*O
+x.?
+
+:20,near,osafe,xsafe
+#+END_EXAMPLE
+
+以上模式，排除了倒撲或者將會是對手倒撲的情況（osafe, xsafe）。
+
+看到棋子被提走也很有趣。一個提走全部棋子的模式將會是：
+
+#+BEGIN_EXAMPLE
+?X%
+?*%
+%%%
+
+:10,ocap1,osafe
+:20,ocap2
+:30,ocap3
+#+END_EXAMPLE
+
+我們使用多個冒號開始的行來指定不同的移動值，具體取決於提取棋子的個數。價值10代表
+提取單個棋子，價值20代表提取兩個棋子，價值30代表提取更多的棋子。這裡我們還排除了
+當提取一個棋子時會形成倒撲的落點，用以避免模擬陷入三劫循環。（在模擬中沒有對禁全
+同的偵測 [fn:superko]）。
+
+[fn:superko] PSK(Positional Superko)：禁止使对方面对已经出现过的局面(Position),
+简称禁全同。禁全同规则保证了棋局长度的有限。
+
+
+全部的屬性模式如下：
+
+- =near= :: The move is "near" the previous move.
+
+- =far= :: The move is not "near" the previous move.
+
+- =osafe= :: The move is not a self-atari.
+
+- =ounsafe= :: The move is a self-atari.
+
+- =xsafe= :: The move would not be a self-atari for the opponent.
+
+- =xunsafe= :: The move would be a self-atari for the opponent.
+
+- =xsuicide= :: The move would be suicide for the opponent
+
+- =xnosuicide= :: The move would not be suicide for the opponent.
+
+- =ocap0= :: The move captures zero stones.
+
+- =ocap1= :: The move captures one stone.
+
+- =ocap2= :: The move captures two stones.
+
+- =ocap3= :: The move captures three or more stones.
+
+- =ocap1+= :: The move captures one or more stones.
+
+- =ocap1-= :: The move captures at most one stone.
+
+- =ocap2+= :: The move captures two or more stones.
+
+- =ocap2-= :: The move captures at most two stones.
+
+- =xcap0= :: An opponent move would capture zero stones.
+
+- =xcap1= :: An opponent move would capture one stone.
+
+- =xcap2= :: An opponent move would capture two stones.
+
+- =xcap3= :: An opponent move would capture three or more stones.
+
+- =xcap1+= :: An opponent move would capture one or more stones.
+
+- =xcap1-= :: An opponent move would capture at most one stone.
+
+- =xcap2+= :: An opponent move would capture two or more stones.
+
+- =xcap2-= :: An opponent move would capture at most two stones. 
+
+這些屬性可以任意組合，但所有模式必須都滿足才能生效。如果矛盾的屬性相組合，模式將
+永遠不匹配。
+
+** 最後的註解
+
+#+BEGIN_VERSE
+移動值是無符號32位整數。為避免計算溢出，強烈建議將值保持在10000000以下。
+數據庫中有許多模式沒有速度懲罰，每一步的平均時間大約是定值（稍微依賴於棋子被提取
+或者變得氣緊的頻率），同時每局棋的時間依賴于遊戲的平均長度（手數）。
+更多複雜的模式數據庫，參考 ='patterns/mc_montegnu_classic.db'= 和
+='patterns/mc_mogo_classic.db'= 。
+#+END_VERSE
+
+沒有人真正知道如何調整隨機仿真以獲得盡可能強勁的引擎。請玩的同時報告任何有趣的發
+現，特別是如果你能夠使它比 ='montegnu_classic'= 模式更強大。
 
