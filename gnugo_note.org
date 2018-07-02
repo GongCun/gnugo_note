@@ -1445,13 +1445,6 @@ $P(B|A^c)$ 和 圖 =(c')= 的 $P(B)$ 相同，由於對於圖 =(c')= 來說，�
 ** ='optics.c'= 中的函數
 待譯
 
-<<territory>>
-<<escape>>
-<<surround>>
-<<owl>>
-<<return_code>>
-<<colored_display>>
-
 * Monte Carlo Go
 Monte Carlo Go 引擎將隨機落子到最後，基於 UCT 算法（upper confidence bounds
 applied to trees，上限置信區間演算法）從模式數據庫中產生落子點。這個算法使得
@@ -1652,3 +1645,257 @@ x.?
 沒有人真正知道如何調整隨機仿真以獲得盡可能強勁的引擎。請玩的同時報告任何有趣的發
 現，特別是如果你能夠使它比 ='montegnu_classic'= 模式更強大。
 
+* The Board Library
+GNU Go 引擎的基礎是一個處理棋盤非常高效的例程庫。這個棋盤例程庫，稱之為
+='libboard'= ，能夠用於那些只需要基本規則但不支持 AI 功能的程序。其中之一的程序
+='patterns/joseki.c'= ，是從 SGF 文件編譯成定式模式庫。
+
+如果你想在你自己的程序中使用這個例程庫，你需要所有位於 engine/Makefile.am 中的
+=libboard_SOURCE= 下 [fn::GNU Go 3.8 是 =libboard_a_SOURCE= ]的 .c 文件，以及所
+有位於目錄 sgf/ 和 utils/ 下的文件。同時你必須將頭文件 engine/board.h 放在你的代
+碼中。
+
+例程庫包含以外文件：
+
+- ='board.h'= :: 棋盤庫的公共接口。
+- ='board.c'= :: 基礎棋盤代碼。它使用增量算法來跟蹤圍棋盤上的棋子串及氣。
+- ='boardlib.c'= :: 包含了棋盤庫的所有全局變量。
+- ='hash.c'= :: 棋子位置哈希代碼。
+- ='sgffile.c'= :: 以 SGF 格式輸出文件。
+- ='printutils.c'= :: 用於打印圍棋棋盤及其他東西。
+
+為了使用棋盤例程庫，必須包含頭文件 ='liberty.h'= ，正如使用整個引擎功能一樣，當
+然你不能使用這個頭文件中所定義的所有函數，即作為引擎部分，但不是棋盤庫部分的那些
+函數。你必須將你的應用程序與 =libboard.a= 文件鏈接起來。
+
+** 棋盤數據結構
+棋盤的基本數據結構與 =board_state= 結構（見[[the_board_state_struct][The board state struct]]）緊密結合。由
+於效率的原因它們全部以全局變量的形式保存，最重要的內容如下：
+
+#+BEGIN_EXAMPLE
+int           board_size;
+Intersection  board[MAXSIZE];
+int           board_ko_pos;
+
+float         komi;
+int           white_captured;
+int           black_captured;
+
+Hash_data     hashdata;
+#+END_EXAMPLE
+
+這些變量也適用於對 =Position= 結構的描述，所以我們在這裡不再重複。由於性能原因，
+所有這些變量都是全局的。在這些變量背後，還有一些其他的私有數據結構。這些實現了對
+棋子串、氣和其他屬性的增量處理（參見[[incremental_board_data_structures][Incremental Board data structures]]）。變量
+=hashdata= 包含了有關當前位置的散列值信息（參考[[hasing_of_positions][Hashing of Positions]]）。
+
+不應該直接操縱這些變量，因為它們僅僅是增量器的前端。它們可以被讀取，但只能通過使
+用下一節中描述的函數來編寫。如果你直接對它們進行寫入，增量數據結構將彼此不同步，
+很可能導致崩潰。
+
+** 棋盤陣列
+GNU Go 用一個被稱為 =board= 的一維數組來刻畫棋盤。出於某些目的，可以使用參數
+=(i,j)= 對棋盤進行二維索引。
+
+=board= 陣列包含了圍繞棋盤外的標記。為了清楚地說明與舊的二維棋盤表示的關係，下圖
+顯示了當 =MAX_BOARD= 為7時，1D指標和2D指標的對應關係。
+
+#+BEGIN_EXAMPLE
+  j  -1   0   1   2   3   4   5   6
+i +----------------------------------
+-1|   0   1   2   3   4   5   6   7
+ 0|   8   9  10  11  12  13  14  15
+ 1|  16  17  18  19  20  21  22  23
+ 2|  24  25  26  27  28  29  30  31
+ 3|  32  33  34  35  36  37  38  39
+ 4|  40  41  42  43  44  45  46  47
+ 5|  48  49  50  51  52  53  54  55
+ 6|  56  57  58  59  60  61  62  63
+ 7|  64  65  66  67  68  69  70  71  72
+#+END_EXAMPLE
+
+宏 =POS, I, J= 用於在 1D 索引 =pos= 和 2D 索引 =(i,j)= 之間轉換，定義如下：
+
+#+BEGIN_EXAMPLE
+#define POS(i, j)    ((MAX_BOARD + 2) + (i) * (MAX_BOARD + 1) + (j))
+#define I(pos)       ((pos) / (MAX_BOARD + 1) - 1)
+#define J(pos)       ((pos) % (MAX_BOARD + 1) - 1)
+#+END_EXAMPLE
+
+所有棋盤外的點的 1D 指標被標記為 =GRAY= 。因此如果 =board_size= 和 =MAX_BOARD=
+都是 7， 則看似如下：
+
+#+BEGIN_EXAMPLE
+  j  -1   0   1   2   3   4   5   6
+i +----------------------------------
+-1|   #   #   #   #   #   #   #   #
+ 0|   #   .   .   .   .   .   .   .
+ 1|   #   .   .   .   .   .   .   .
+ 2|   #   .   .   .   .   .   .   .
+ 3|   #   .   .   .   .   .   .   .
+ 4|   #   .   .   .   .   .   .   .
+ 5|   #   .   .   .   .   .   .   .
+ 6|   #   .   .   .   .   .   .   .
+ 7|   #   #   #   #   #   #   #   #   #
+#+END_EXAMPLE
+
+標記為 ='#'= 的索引值為 =GRAY= 。如果 =MAX_BOARD= 為7 而 =board_size= 為 5：
+
+#+BEGIN_EXAMPLE
+  j  -1   0   1   2   3   4   5   6
+i +----------------------------------
+-1|   #   #   #   #   #   #   #   #
+ 0|   #   .   .   .   .   .   #   #
+ 1|   #   .   .   .   .   .   #   #
+ 2|   #   .   .   .   .   .   #   #
+ 3|   #   .   .   .   .   .   #   #
+ 4|   #   .   .   .   .   .   #   #
+ 5|   #   #   #   #   #   #   #   #
+ 6|   #   #   #   #   #   #   #   #
+ 7|   #   #   #   #   #   #   #   #   #
+#+END_EXAMPLE
+
+棋盤上的導航是由 =SOUTH, WEST, NORTH, EAST= 宏完成的，
+
+#+BEGIN_SRC c
+#define NS           (MAX_BOARD + 1)
+#define WE           1
+#define SOUTH(pos)   ((pos) + NS)
+#define WEST(pos)    ((pos) - 1)
+#define NORTH(pos)   ((pos) - NS)
+#define EAST(pos)    ((pos) + 1)
+#+END_SRC
+
+也有 =SW, NW, NE, SE, SS, WW, NN, EE= 等速記宏用於兩步移動的縮寫。
+
+任何從棋盤上一點到相鄰或對角點的移動都保證會在棋盤陣列中產生一個有效索引，如果它
+不在棋盤上，則找到的顏色是 GRAY。這裡有兩個宏用於對是否在棋盤外進行顯式測試：
+
+#+BEGIN_SRC c
+#define ON_BOARD(pos) (board[pos] != GRAY)
+#define ON_BOARD1(pos) (((unsigned) (pos) < BOARDSIZE) && board[pos] != GRAY)
+#+END_SRC
+
+第一個用于算法，第二個用於斷言測試。
+
+使用一維數組表示棋盤的優點是具有顯著的性能優勢。我們只需要一個變量去確定棋盤位置，
+意味著很多函數需要更少的參數。而且，通常一維坐標只要計算一次，而二維坐標需要計算
+兩次：例如，如果我們想要 =pos= 的右上角坐標，我們可以用 =NORTH(EAST(pos))= 代替
+=(i+1, j-1)= 。
+
+*重要* ：二維坐標 =(-1,-1)= ，用於放棄一步（pass）或者有時用於指向不存在的點（no
+point），映射到一維坐標是 =0= ，而不是 =-1= 。使用宏 =NO_MOVE= 或 =PASS_MODE= 來
+代替普通的 =0= 。
+
+在多個方向上循環可以直接寫為：
+
+#+BEGIN_SRC c
+  for (k = 0; k < 4; k++) {
+      int d = delta[k];
+      do_something(pos + d);
+  }
+#+END_SRC
+
+下面的常量對於遍歷整個棋盤和對數組與棋盤進行1對1映射非常有用：
+
+#+BEGIN_SRC c
+#define BOARDSIZE    ((MAX_BOARD + 2) * (MAX_BOARD + 1) + 1)
+#define BOARDMIN     (MAX_BOARD + 2)
+#define BOARDMAX     (MAX_BOARD + 1) * (MAX_BOARD + 1)
+#+END_SRC
+
+=BOARDSIZE= 是一維棋盤數組的實際大小， =BOARDMIN= 是棋盤上第一個點對應的坐標索引，
+而 =BOARDMAX= 是棋盤上最後一個點對應的坐標索引加上1。
+
+通常我們想要遍歷棋盤，在每個頂點上執行一些函數，這裡有兩種可能的方法：
+
+#+BEGIN_SRC c
+  int m, n;
+  for (m = 0; m < board_size; m++)
+    for (n = 0; n < board_size; n++) {
+      do_something(POS(m, n));
+    }
+#+END_SRC
+
+或者
+
+#+BEGIN_SRC c
+  int pos;
+  for (pos = BOARDMIN; pos < BOARDMAX; pos++) {
+    if (ON_BOARD(pos))
+      do_something(pos);
+  }
+#+END_SRC
+
+** 增量棋盤數據結構
+除了全局棋盤狀態， ='board.c'= 中的算法實現了增量更新方法，跟蹤每個棋子串的以下
+信息：
+
+- 棋子串的顏色（黑、白、灰）。
+- 棋子串中棋子的個數。
+- 棋子串的起點，即標準參考點，定義為串中具有最小一維棋盤坐標的點。
+- 串中棋子的列表。
+- 氣的數量。
+- 氣的列表，如果有太多的氣，列表會被截斷。
+- 鄰近棋子串的個數。
+- 鄰近棋子串的列表。
+
+基本數據結構是：
+
+#+BEGIN_SRC c
+struct string_data {
+  int color;                       /* Color of string, BLACK or WHITE */
+  int size;                        /* Number of stones in string. */
+  int origin;                      /* Coordinates of "origin", i.e. */
+                                   /* "upper left" stone. */
+  int liberties;                   /* Number of liberties. */
+  int libs[MAX_LIBERTIES];         /* Coordinates of liberties. */
+  int neighbors;                   /* Number of neighbor strings */
+  int neighborlist[MAXCHAIN];      /* List of neighbor string numbers. */
+  int mark;                        /* General purpose mark. */
+};
+
+struct string_data string[MAX_STRINGS];
+#+END_SRC
+
+應該清楚的是，幾乎所有的信息都存儲在 =string= 數組中。要獲得棋盤坐標到 =string=
+數組的轉換，我們有
+
+#+BEGIN_SRC c
+static int string_number[BOARDMAX];
+#+END_SRC
+
+包含 =string= 數組中的索引。此信息僅在非空頂點有效，因此必須先驗證 $board[pos]
+!= EMPTY$ 。
+
+=string_data= 結構並不包含棋子坐標的數組，相關信息儲存在一個單獨的數組中：
+
+#+BEGIN_SRC c
+static int next_stone[BOARDMAX];
+#+END_SRC
+
+這個數組實現了棋子的循環鏈錶。每一個頂點包含了指向另一個頂點（可能是相同的）的指
+針。從棋盤上任一棋子開始，在返回到起點之前，沿著這些指針應該以任意順序遍歷整個棋
+子串。至於 ='string_number'= 數組，該信息在棋盤的空點上無效。這個數據結構的好處
+在於只需要固定的空間（無關棋子串的數目），並且可以很容易地添加新的棋子或合併兩個
+棋子串。
+
+此外，代碼使用了一些靜態變量：
+
+#+BEGIN_SRC c
+static int ml[BOARDMAX];
+static int liberty_mark;
+static int string_mark;
+static int next_string;
+static int strings_initialized = 0;
+#+END_SRC
+
+<<territory>>
+<<escape>>
+<<surround>>
+<<owl>>
+<<return_code>>
+<<colored_display>>
+<<the_board_state_struct>>
+<<hasing_of_positions>>
+<<incremental_board_data_structures>>
