@@ -1969,7 +1969,34 @@ POP_MOVE()
 ='s'= 作為 =string= 數組的索引，有時也作為指向 =string= 數組條目的指針。
 
 ** 某些棋盤函數
-*解讀* ，在計算機博弈論中也經常稱之為 *搜索* ，是 GNU Go 中的一個基本過程。
+*解讀* ，在計算機博弈論中也經常稱之為 *搜索* ，是 GNU Go 中的一個基本過程。這是
+一個生成假想未來棋盤的過程，已確定某些問題的答案，例如 “這些棋子是活棋嗎”。由
+於這是對未來位置的假設，因此可以撤銷非常重要，最終可以回到當前狀態。因此在“解
+讀”的過程中需要維護一個記錄棋子移動的堆棧。當一個移動被嘗試，通過函數 =trymove=
+，或者其變體 =tryko= 。這個函數將當前棋盤推入堆棧，并進行移動。用於跟蹤位置的堆
+棧指針 =stackp= 是遞增的。函數 =popgo()= 彈出移動堆棧，減少 =stackp= 并取消最後
+的移動。
+
+每一次成功的 =trymove()= 都必須與 =popgo()= 匹配，因此正確的函數使用方式是：
+
+#+BEGIN_SRC c
+  if (trymove(pos, color, ... )) {
+       /* ...    [potentially lots of code here]  */
+       popgo();
+  }   
+#+END_SRC
+
+如果落子是一次提劫，提取棋子的合法性取決於 komaster 方案 （參考 [[ko_handling][Ko Handling]]）。
+
+/此處省略對函數具體描述的翻譯/
+
+如你所見， /trymove()/ 是對下一手的嘗試，可以通過 /gopop()/ 撤銷，當GNU Go 分析
+棋盤位置時，每次會被調用數千次。相比之下，函數 /play_move()/ 是一次永久的移動，
+但仍然是可撤銷的，如當對手悔棋時。
+
+/此處省略對函數具體描述的翻譯/
+
+其他棋盤函數可以參考[[board_utilities][Board Utilities]]
 
 
 
@@ -1982,3 +2009,5 @@ POP_MOVE()
 <<the_board_state_struct>>
 <<hasing_of_positions>>
 <<incremental_board_data_structures>>
+<<ko_handling>>
+<<board_utilities>>
